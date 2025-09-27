@@ -29,6 +29,13 @@ Navigate to your project directory and run:
 ```bash
 tw-gen
 ```
+OR
+
+```bash
+tw-gen --watch
+```
+
+For For instant changes in the output css
 
 This will:
 

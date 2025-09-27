@@ -1,18 +1,32 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::mpsc::channel;
 use regex::Regex;
+use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use std::time::{Duration, Instant};
 
 const FULL_CSS: &str = include_str!("full.css"); // embedded CSS
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let watch_mode = args.iter().any(|arg| arg == "--watch");
+
+    if watch_mode {
+        println!("👀 Watching for file changes...");
+        watch_and_generate();
+    } else {
+        generate_css();
+    }
+}
+
+fn generate_css() {
     let current_dir = std::env::current_dir().expect("Cannot get current directory");
     let mut classes = HashSet::new();
     explore_dir(&current_dir, &mut classes);
 
     println!("✅ Found {} unique classes", classes.len());
 
-    // extract CSS rules from embedded full.css
     let mut final_css = String::new();
     for cls in &classes {
         let safe_cls = regex::escape(cls);
@@ -24,12 +38,66 @@ fn main() {
             final_css.push('\n');
         }
     }
+
     if !final_css.is_empty() {
         fs::write("output.css", final_css).expect("Cannot write output.css");
-    }else{
-        println!("[X] not a single class found in this directory");
+        println!("💾 output.css updated!");
+    } else {
+        println!("[X] Not a single class found in this directory");
     }
 }
+
+fn watch_and_generate() {
+    let (tx, rx) = channel();
+
+    let mut watcher: RecommendedWatcher =
+        RecommendedWatcher::new(tx, Config::default()).expect("Failed to create watcher");
+
+    watcher
+        .watch(Path::new("."), RecursiveMode::Recursive)
+        .expect("Cannot watch directory");
+
+    println!("👀 Watching for changes...");
+
+    // First run
+    generate_css();
+
+    let mut last_run = Instant::now();
+
+    for res in rx {
+        match res {
+            Ok(Event { paths, .. }) => {
+                // Check if relevant source file changed
+                let relevant = paths.iter().any(|p| {
+                    if let Some(ext) = p.extension() {
+                        ext == "rs" || ext == "html" || ext == "tsx"
+                    } else {
+                        false
+                    }
+                });
+
+                // Ignore output.css and target dir
+                let ignore = paths.iter().any(|p| {
+                    p.to_string_lossy().ends_with("output.css")
+                        || p.to_string_lossy().contains("target")
+                });
+
+                if !relevant || ignore {
+                    continue;
+                }
+
+                // Debounce 500ms
+                if last_run.elapsed() > Duration::from_millis(500) {
+                    println!("🔄 Source changed, regenerating...");
+                    generate_css();
+                    last_run = Instant::now();
+                }
+            }
+            Err(e) => println!("watch error: {:?}", e),
+        }
+    }
+}
+
 
 fn explore_dir(path: &Path, classes: &mut HashSet<String>) {
     if path.is_dir() {
@@ -49,25 +117,20 @@ fn explore_dir(path: &Path, classes: &mut HashSet<String>) {
     }
 }
 
-/// Extract classes from a source file (removes Rust comments + inline comments in strings)
 fn extract_classes(content: &str, classes: &mut HashSet<String>) {
-    // 1. Remove top-level Rust comments (// ... or /* ... */)
     let no_comments = Regex::new(r"//.*|/\*[\s\S]*?\*/")
         .unwrap()
         .replace_all(content, "");
 
-    // 2. Capture `class = "..."` or `class: "..."` 
     let re = Regex::new(r#"class\s*[:=]\s*["']([^"']+)["']"#).unwrap();
     let class_filter = Regex::new(r"^[a-z0-9\-\:\/]+$").unwrap();
 
     for cap in re.captures_iter(&no_comments) {
         let mut class_str = cap[1].to_string();
 
-        // 3. Remove inline comments inside strings
         class_str = Regex::new(r"/\*.*?\*/").unwrap().replace_all(&class_str, "").to_string();
         class_str = Regex::new(r"//.*").unwrap().replace_all(&class_str, "").to_string();
 
-        // 4. Split and filter only valid class tokens
         for class_name in class_str.split_whitespace() {
             if class_filter.is_match(class_name) {
                 classes.insert(class_name.to_string());

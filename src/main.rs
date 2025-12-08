@@ -1,9 +1,9 @@
+use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use regex::Regex;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::sync::mpsc::channel;
-use regex::Regex;
-use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::time::{Duration, Instant};
 
 const FULL_CSS: &str = include_str!("full.css"); // embedded CSS
@@ -30,7 +30,12 @@ fn generate_css() {
     let mut final_css = String::new();
     for cls in &classes {
         let safe_cls = regex::escape(cls);
-        let pattern = format!(r"\.{}\s*\{{[^}}]*\}}", safe_cls);
+        // let pattern = format!(r"\.{}\s*\{{[^}}]*\}}", safe_cls);
+        let pattern = format!(
+            r"\.{}(?:\:hover|\:focus|\:active|\:disabled)?[^\{{]*\{{[^}}]*\}}",
+            safe_cls
+        );
+
         let re = Regex::new(&pattern).unwrap();
 
         for cap in re.find_iter(FULL_CSS) {
@@ -98,7 +103,6 @@ fn watch_and_generate() {
     }
 }
 
-
 fn explore_dir(path: &Path, classes: &mut HashSet<String>) {
     if path.is_dir() {
         for entry in fs::read_dir(path).expect("Cannot read directory") {
@@ -128,8 +132,14 @@ fn extract_classes(content: &str, classes: &mut HashSet<String>) {
     for cap in re.captures_iter(&no_comments) {
         let mut class_str = cap[1].to_string();
 
-        class_str = Regex::new(r"/\*.*?\*/").unwrap().replace_all(&class_str, "").to_string();
-        class_str = Regex::new(r"//.*").unwrap().replace_all(&class_str, "").to_string();
+        class_str = Regex::new(r"/\*.*?\*/")
+            .unwrap()
+            .replace_all(&class_str, "")
+            .to_string();
+        class_str = Regex::new(r"//.*")
+            .unwrap()
+            .replace_all(&class_str, "")
+            .to_string();
 
         for class_name in class_str.split_whitespace() {
             if class_filter.is_match(class_name) {
